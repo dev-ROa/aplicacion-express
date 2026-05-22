@@ -1,48 +1,52 @@
 import { Hono } from 'hono'
+import { cors } from 'hono/cors'
 import { Database } from 'bun:sqlite'
 
-// Abre la base de datos
 const db = new Database('./base.sqlite3')
-db.run(`CREATE TABLE IF NOT EXISTS todos (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    todo TEXT NOT NULL,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-)`)
+
+// --- BASE DE DATOS ---
+db.run(`CREATE TABLE IF NOT EXISTS todos 
+    (id INTEGER PRIMARY KEY AUTOINCREMENT, todo TEXT NOT NULL)`)
+    
+db.run(`CREATE TABLE IF NOT EXISTS logs 
+    (id INTEGER PRIMARY KEY AUTOINCREMENT, accion TEXT, detalle TEXT, 
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`)
 
 const app = new Hono()
+app.use('/*', cors())
 
+// 1. LA SOLUCIÓN AL 404 EN EL NAVEGADOR
 app.get('/', (c) => {
-    return c.json({ status: 'ok' })
+    return c.json({ status: 'ok', mensaje: 'API de Android funcionando al 100%' })
 })
 
-app.post('/login', async (c) => {
-    return c.json({ status: 'ok' })
+// 2. LAS RUTAS QUE EXPO NECESITA PARA FUNCIONAR
+app.get('/tareas', (c) => c.json(db.prepare('SELECT * FROM todos').all()))
+
+app.get('/ver_logs', (c) => c.json(db.prepare('SELECT * FROM logs ORDER BY created_at DESC').all()))
+
+app.post('/agrega_todo', async (c) => {
+    const { todo } = await c.req.json()
+    const result = db.prepare('INSERT INTO todos (todo) VALUES (?)').run(todo)
+    db.prepare('INSERT INTO logs (accion, detalle) VALUES (?, ?)').run('CREADO', todo)
+    return c.json({ id: result.lastInsertRowid }, 201)
 })
 
-app.post('/insert', async (c) => {
-    let body
-    try {
-        body = await c.req.json()
-    } catch {
-        return c.json({ error: 'Falta información necesaria' }, 400)
+app.delete('/borrar_todo/:id', (c) => {
+    const id = c.req.param('id')
+    const tarea = db.prepare('SELECT todo FROM todos WHERE id = ?').get(id)
+    if (tarea) {
+        db.prepare('DELETE FROM todos WHERE id = ?').run(id)
+        db.prepare('INSERT INTO logs (accion, detalle) VALUES (?, ?)').run('BORRADO', `Eliminó: ${tarea.todo}`)
     }
-
-    const { todo } = body
-
-    if (!todo) {
-        return c.json({ error: 'Falta información necesaria' }, 400)
-    }
-
-    try {
-        const stmt = db.prepare('INSERT INTO todos (todo) VALUES (?)')
-        const result = stmt.run(todo)
-        return c.json({ id: Number(result.lastInsertRowid), message: 'Insert was successful' }, 201)
-    } catch (err) {
-        return c.json({ error: err.message }, 500)
-    }
+    return c.json({ mensaje: "OK" })
 })
 
-export { app, db }
+app.post('/log_accion', async (c) => {
+    const { accion, detalle } = await c.req.json()
+    db.prepare('INSERT INTO logs (accion, detalle) VALUES (?, ?)').run(accion, detalle)
+    return c.json({ status: 'ok' }, 201)
+})
 
 export default {
     port: process.env.PORT || 3000,
